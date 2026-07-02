@@ -27,7 +27,7 @@ No install, no server, no account, no dependencies. Everything runs client-side 
 The core signal-processing logic (FFT, band bucketing, smoothing, normalization) is a standalone module with no browser dependencies, so it's unit tested directly in Node — no install required:
 
 ```
-node --test tests/
+node --test
 ```
 
 ## Known limitations

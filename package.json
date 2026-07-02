@@ -4,6 +4,6 @@
   "description": "Turns a voiceover audio file into a reactive black-background/white-bars waveform video.",
   "license": "MIT",
   "scripts": {
-    "test": "node --test tests/"
+    "test": "node --test"
   }
 }
