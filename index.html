@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Waveform generator</title>
+<style>
+  :root {
+    --bg: #0b0b0b;
+    --panel: #161616;
+    --border: #2a2a2a;
+    --border-strong: #3a3a3a;
+    --text: #f2f2f0;
+    --text-secondary: #9a9a96;
+    --accent: #f2f2f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 48px 20px;
+  }
+  .app {
+    width: 100%;
+    max-width: 420px;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 500;
+    margin: 0 0 4px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0 0 28px;
+  }
+  .dropzone {
+    border: 1px dashed var(--border-strong);
+    border-radius: 10px;
+    padding: 28px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--text-secondary);
+    background: var(--panel);
+  }
+  .dropzone p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .dropzone .filename {
+    color: var(--text);
+    font-weight: 500;
+    margin-top: 6px;
+  }
+  input[type="file"] { display: none; }
+
+  .preview-frame {
+    margin: 20px 0;
+    background: #000000;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    aspect-ratio: 9 / 16;
+    width: 100%;
+    max-width: 260px;
+    margin-left: auto;
+    margin-right: auto;
+    overflow: hidden;
+    display: none;
+  }
+  .preview-frame.visible { display: block; }
+  .preview-frame canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 20px;
+  }
+  button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 11px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s ease, opacity 0.15s ease;
+  }
+  button:hover:not(:disabled) { background: var(--panel); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  button.primary {
+    background: var(--text);
+    color: #0b0b0b;
+    border-color: var(--text);
+  }
+  button.primary:hover:not(:disabled) { background: #d6d6d3; }
+
+  .status {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 14px;
+    min-height: 16px;
+  }
+  .status.error { color: #e5867a; }
+
+  .progress-track {
+    width: 100%;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 10px;
+    display: none;
+  }
+  .progress-track.visible { display: block; }
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--text);
+    transition: width 0.1s linear;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <h1>Waveform generator</h1>
+  <p class="subtitle">Upload a voiceover, get a black-background / white-bars clip you can drop onto anything using Screen or Lighten blend mode.</p>
+
+  <div class="dropzone" id="dropzone">
+    <p id="dropzone-text">Click to choose an audio file, or drag one here</p>
+    <div class="filename" id="filename"></div>
+  </div>
+  <input type="file" id="fileInput" accept="audio/*" />
+
+  <div class="preview-frame" id="previewFrame">
+    <canvas id="canvas" width="1080" height="1920"></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="previewBtn" disabled>Preview</button>
+    <button id="exportBtn" class="primary" disabled>Generate &amp; download</button>
+  </div>
+
+  <div class="progress-track" id="progressTrack">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+  <div class="status" id="status"></div>
+</div>
+
+<script src="waveform-core.js"></script>
+<script>
+(function () {
+  const FPS = 30;
+  const NUM_BANDS = 28;
+  const FFT_SIZE = 2048;
+  const ATTACK_MS = 40;
+  const RELEASE_MS = 180;
+  const CANVAS_W = 1080;
+  const CANVAS_H = 1920;
+  const MAX_BAR_HEIGHT = 420;
+  const MIN_BAR_HEIGHT = 6;
+  const BAR_GAP_RATIO = 0.35; // gap as a fraction of bar width
+
+  const dropzone = document.getElementById('dropzone');
+  const dropzoneText = document.getElementById('dropzone-text');
+  const filenameEl = document.getElementById('filename');
+  const fileInput = document.getElementById('fileInput');
+  const previewFrame = document.getElementById('previewFrame');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const previewBtn = document.getElementById('previewBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const statusEl = document.getElementById('status');
+  const progressTrack = document.getElementById('progressTrack');
+  const progressFill = document.getElementById('progressFill');
+
+  let audioBuffer = null;
+  let barHeightsPerFrame = null;
+  let sourceFileName = 'waveform';
+  let isPlaying = false;
+  let playRafId = null;
+  let audioCtxForPlayback = null;
+
+  function setStatus(msg, isError) {
+    statusEl.textContent = msg || '';
+    statusEl.classList.toggle('error', !!isError);
+  }
+
+  function drawFrame(barHeights) {
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    const n = barHeights.length;
+    const totalWidth = CANVAS_W * 0.8;
+    const barWidth = totalWidth / (n + (n - 1) * BAR_GAP_RATIO);
+    const gap = barWidth * BAR_GAP_RATIO;
+    const startX = (CANVAS_W - (n * barWidth + (n - 1) * gap)) / 2;
+    const centerY = CANVAS_H / 2;
+
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < n; i++) {
+      const h = barHeights[i];
+      const x = startX + i * (barWidth + gap);
+      const y = centerY - h / 2;
+      const r = Math.min(barWidth / 2, 6);
+      roundRect(ctx, x, y, barWidth, h, r);
+      ctx.fill();
+    }
+  }
+
+  function roundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + w, y, x + w, y + h, r);
+    c.arcTo(x + w, y + h, x, y + h, r);
+    c.arcTo(x, y + h, x, y, r);
+    c.arcTo(x, y, x + w, y, r);
+    c.closePath();
+  }
+
+  function idleFrame() {
+    const n = NUM_BANDS;
+    const flat = new Array(n).fill(MIN_BAR_HEIGHT);
+    drawFrame(flat);
+  }
+  idleFrame();
+
+  async function handleFile(file) {
+    if (!file) return;
+    sourceFileName = file.name.replace(/\.[^.]+$/, '') || 'waveform';
+    filenameEl.textContent = file.name;
+    dropzoneText.textContent = 'Analyzing audio…';
+    previewBtn.disabled = true;
+    exportBtn.disabled = true;
+    setStatus('Decoding audio…');
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const decodeCtx = new AudioContextClass();
+      audioBuffer = await decodeCtx.decodeAudioData(arrayBuffer);
+      await decodeCtx.close();
+
+      setStatus('Analyzing volume over time…');
+      const channelData = audioBuffer.getChannelData(0);
+      barHeightsPerFrame = WaveformCore.computeBarHeightsForClip(
+        channelData,
+        audioBuffer.sampleRate,
+        audioBuffer.duration,
+        {
+          fps: FPS,
+          fftSize: FFT_SIZE,
+          numBands: NUM_BANDS,
+          attackMs: ATTACK_MS,
+          releaseMs: RELEASE_MS,
+          maxHeightPx: MAX_BAR_HEIGHT,
+          minHeightPx: MIN_BAR_HEIGHT,
+        }
+      );
+
+      dropzoneText.textContent = 'Click to choose a different file';
+      previewFrame.classList.add('visible');
+      previewBtn.disabled = false;
+      exportBtn.disabled = false;
+      setStatus(`Ready — ${audioBuffer.duration.toFixed(1)}s clip, ${barHeightsPerFrame.length} frames analyzed.`);
+      drawFrame(barHeightsPerFrame[0]);
+    } catch (err) {
+      console.error(err);
+      setStatus('Could not read that audio file. Try a standard mp3, wav, or m4a.', true);
+      dropzoneText.textContent = 'Click to choose an audio file, or drag one here';
+    }
+  }
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+
+  ['dragover', 'dragenter'].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    })
+  );
+  ['dragleave', 'drop'].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+    })
+  );
+  dropzone.addEventListener('drop', (e) => {
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+
+  function stopPreview() {
+    isPlaying = false;
+    if (playRafId) cancelAnimationFrame(playRafId);
+    if (audioCtxForPlayback) {
+      audioCtxForPlayback.close();
+      audioCtxForPlayback = null;
+    }
+    previewBtn.textContent = 'Preview';
+  }
+
+  previewBtn.addEventListener('click', () => {
+    if (!audioBuffer || !barHeightsPerFrame) return;
+    if (isPlaying) {
+      stopPreview();
+      idleFrame();
+      return;
+    }
+    isPlaying = true;
+    previewBtn.textContent = 'Stop preview';
+
+    audioCtxForPlayback = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtxForPlayback.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtxForPlayback.destination);
+    const startTime = audioCtxForPlayback.currentTime;
+    source.start(startTime);
+    source.onended = () => {
+      if (isPlaying) { stopPreview(); idleFrame(); }
+    };
+
+    function tick() {
+      if (!isPlaying) return;
+      const elapsed = audioCtxForPlayback.currentTime - startTime;
+      const frameIdx = Math.min(barHeightsPerFrame.length - 1, Math.floor(elapsed * FPS));
+      drawFrame(barHeightsPerFrame[frameIdx]);
+      if (elapsed < audioBuffer.duration) {
+        playRafId = requestAnimationFrame(tick);
+      }
+    }
+    tick();
+  });
+
+  function pickSupportedMimeType() {
+    const candidates = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+    ];
+    for (const type of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
+    }
+    return '';
+  }
+
+  exportBtn.addEventListener('click', async () => {
+    if (!audioBuffer || !barHeightsPerFrame) return;
+    if (isPlaying) stopPreview();
+    if (!window.MediaRecorder) {
+      setStatus('This browser does not support MediaRecorder, so it cannot export video. Try a recent Chrome or Edge.', true);
+      return;
+    }
+
+    previewBtn.disabled = true;
+    exportBtn.disabled = true;
+    progressTrack.classList.add('visible');
+    progressFill.style.width = '0%';
+    setStatus('Recording…');
+
+    const mimeType = pickSupportedMimeType();
+    const stream = canvas.captureStream(FPS);
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+
+    const done = new Promise((resolve) => { recorder.onstop = resolve; });
+
+    recorder.start();
+    const startedAt = performance.now();
+    const durationMs = audioBuffer.duration * 1000;
+
+    function renderTick() {
+      const elapsedMs = performance.now() - startedAt;
+      const frameIdx = Math.min(barHeightsPerFrame.length - 1, Math.floor((elapsedMs / 1000) * FPS));
+      drawFrame(barHeightsPerFrame[frameIdx]);
+      progressFill.style.width = Math.min(100, (elapsedMs / durationMs) * 100) + '%';
+
+      if (elapsedMs < durationMs) {
+        requestAnimationFrame(renderTick);
+      } else {
+        drawFrame(barHeightsPerFrame[barHeightsPerFrame.length - 1]);
+        setTimeout(() => recorder.stop(), 100); // small tail so the last frame is captured
+      }
+    }
+    requestAnimationFrame(renderTick);
+
+    await done;
+
+    const blob = new Blob(chunks, { type: mimeType || 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = sourceFileName + '-waveform.webm';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    progressTrack.classList.remove('visible');
+    previewBtn.disabled = false;
+    exportBtn.disabled = false;
+    setStatus(`Done — downloaded ${sourceFileName}-waveform.webm (${(blob.size / 1024 / 1024).toFixed(1)} MB). Black background, white bars — set the clip's blend mode to Screen or Lighten in your editor.`);
+  });
+})();
+</script>
+
+</body>
+</html>
