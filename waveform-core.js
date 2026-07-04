@@ -141,17 +141,32 @@
     return smoothed;
   }
 
-  // ---- Normalize the whole clip's band values to roughly 0..1 using a 95th percentile reference ----
-  function normalizeBands(framesBands) {
+  // ---- Normalize the whole clip's band values to roughly 0..1 using a near-peak reference,
+  // with a soft knee so the loudest moments ease toward the ceiling instead of flattening out ----
+  function normalizeBands(framesBands, opts) {
     if (framesBands.length === 0) return [];
+    opts = opts || {};
+    const percentile = opts.percentile == null ? 0.99 : opts.percentile; // near-true-peak, not 95th
+    const kneeStart = opts.kneeStart == null ? 0.85 : opts.kneeStart; // start softening above this level
+
     const all = [];
     for (const frame of framesBands) for (let b = 0; b < frame.length; b++) all.push(frame[b]);
     all.sort((a, b) => a - b);
-    const idx = Math.floor(0.95 * (all.length - 1));
+    const idx = Math.floor(percentile * (all.length - 1));
     const reference = Math.max(all[idx], 1e-9);
+    const kneeRange = 1 - kneeStart;
+
     return framesBands.map((frame) => {
       const out = new Float64Array(frame.length);
-      for (let b = 0; b < frame.length; b++) out[b] = Math.min(1, frame[b] / reference);
+      for (let b = 0; b < frame.length; b++) {
+        let v = frame[b] / reference;
+        if (v > kneeStart) {
+          // soft-knee compression: asymptotically approaches 1 instead of hard-clamping
+          const excess = v - kneeStart;
+          v = kneeStart + kneeRange * (1 - Math.exp(-excess / kneeRange));
+        }
+        out[b] = Math.min(1, v);
+      }
       return out;
     });
   }

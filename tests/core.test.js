@@ -100,6 +100,24 @@ test('normalizeBands: scales values into 0..1 range', () => {
   }
 });
 
+test('normalizeBands: soft knee means very loud values stay distinguishable instead of flattening', () => {
+  // Two frames: one moderately loud, one extremely loud (way past the old 95th-percentile ceiling)
+  const frames = [
+    new Float64Array([1]),
+    new Float64Array([1]),
+    new Float64Array([1]),
+    new Float64Array([2]),   // moderately over reference
+    new Float64Array([10]),  // extremely over reference (e.g. a shouted word)
+  ];
+  const normalized = WaveformCore.normalizeBands(frames);
+  const moderate = normalized[3][0];
+  const extreme = normalized[4][0];
+
+  assert.ok(moderate < 1, 'moderately loud value should not be fully clamped');
+  assert.ok(extreme <= 1, 'extreme value must still respect the absolute ceiling');
+  assert.ok(extreme > moderate, 'a louder moment should still register as taller than a quieter one, not flatten to the same height');
+});
+
 test('mapToBarHeights: respects min/max pixel bounds', () => {
   const frame = new Float64Array([0, 0.5, 1]);
   const heights = WaveformCore.mapToBarHeights(frame, 400, 4);
